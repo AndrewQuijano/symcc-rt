@@ -17,6 +17,7 @@
 // Definitions that we need for the QSYM backend
 //
 
+#include <iostream>
 #include "Runtime.h"
 #include "GarbageCollection.h"
 
@@ -135,6 +136,8 @@ public:
   }
 
   void saveValues(const std::string &suffix) override {
+    // https://github.com/eurecom-s3/qsym/blob/ccd2f41f2efb1b0517b83458c181e060497fa589/qsym/pintool/solver.cpp#L314-L340
+	  std::cout << "I am at SaveValues() using qsym\n";
     if (auto handler = g_test_case_handler) {
       auto values = getConcreteValues();
       // The test-case handler may be instrumented, so let's call it with
@@ -143,8 +146,10 @@ public:
       // last registered for a function parameter.
       _sym_set_parameter_expression(0, nullptr);
       _sym_set_parameter_expression(1, nullptr);
+      std::cout << "Using the modified SaveValues() using qsym\n";
       handler(values.data(), values.size());
     } else {
+      std::cout << "Using the original SaveValues() from qsym\n";
       Solver::saveValues(suffix);
     }
   }
@@ -316,11 +321,21 @@ SymExpr _sym_build_trunc(SymExpr expr, uint8_t bits) {
       g_expr_builder->createTrunc(allocatedExpressions.at(expr), bits));
 }
 
+// gets called first
 void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id) {
   if (constraint == nullptr)
     return;
 
+  std::cout << "Reading allocated Expression map\n";
+  for (const auto &pair : allocatedExpressions) {
+    std::cout << "Key: " << pair.first->toString() 
+            << ", Value: " << pair.second->toString() << "\n";
+  }
+
+  // ./runtime/src/backends/qsym/qsym/qsym/pintool/solver.cpp
+  // https://github.com/eurecom-s3/qsym/blob/ccd2f41f2efb1b0517b83458c181e060497fa589/qsym/pintool/solver.cpp#L160-L188
+  // Seems like taken != 0, true means branch is taken, false branch is not?
   g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 }
 
@@ -434,12 +449,23 @@ const char *_sym_expr_to_string(SymExpr expr) {
 }
 
 bool _sym_feasible(SymExpr expr) {
+  // Run after you push path constraint...
+  std::cerr << "I call _sym_feasible!\n";
+  
   expr->simplify();
 
   g_solver->push();
   g_solver->add(expr->toZ3Expr());
+  // check calls this function, you can see from printing of [STAT SMT printed
+  // https://github.com/eurecom-s3/qsym/blob/ccd2f41f2efb1b0517b83458c181e060497fa589/qsym/pintool/solver.cpp#L160-L188
   bool feasible = (g_solver->check() == z3::sat);
   g_solver->pop();
+
+  if (feasible) {
+    std::cout << "Expression is feasible\n";
+  } else {
+    std::cout << "Expression is not feasible\n";
+  }
 
   return feasible;
 }
