@@ -153,6 +153,44 @@ public:
       Solver::saveValues(suffix);
     }
   }
+
+  // Test overwriting the addJcc method
+  void Solver::addJcc(ExprRef e, bool taken, ADDRINT pc) override {
+
+    std::cout << "I can overwrite addJCC and I am using it now\n";
+    std::cout << "The branch is currently " << taken << "\n";
+    std::cout << "Value of pc is " << pc << "\n";
+    std::cout << "Constraints are " << e.printConstraints() << "\n";
+
+    // Save the last instruction pointer for debugging
+    last_pc_ = pc;
+
+    if (e->isConcrete())
+      return;
+
+    // if e == Bool(true), then ignore
+    if (e->kind() == Bool) {
+      assert(!(castAs<BoolExpr>(e)->value()  ^ taken));
+      return;
+    }
+
+    assert(isRelational(e.get()));
+
+    // check duplication before really solving something,
+    // some can be handled by range based constraint solving
+    bool is_interesting;
+    if (pc == 0) {
+      // If addJcc() is called by special case, then rely on last_interested_
+      is_interesting = last_interested_;
+    }
+    else
+      is_interesting = isInterestingJcc(e, taken, pc);
+
+    if (is_interesting)
+      negatePath(e, taken);
+    addConstraint(e, taken, is_interesting);
+}
+
 };
 
 EnhancedQsymSolver *g_enhanced_solver;
@@ -195,6 +233,8 @@ void _sym_initialize(void) {
   g_solver = g_enhanced_solver; // for QSYM-internal use
   g_expr_builder = g_config.pruning ? PruneExprBuilder::create()
                                     : SymbolicExprBuilder::create();
+
+  // TODO: We should parse the AST, and initialize structures to track branches taken
 }
 
 SymExpr _sym_build_integer(uint64_t value, uint8_t bits) {
@@ -322,16 +362,11 @@ SymExpr _sym_build_trunc(SymExpr expr, uint8_t bits) {
 }
 
 // gets called first
+// calls addJcc -> NegatePath -> CheckandSave
 void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id) {
   if (constraint == nullptr)
     return;
-
-  std::cout << "Reading allocated Expression map\n";
-  for (const auto &pair : allocatedExpressions) {
-    std::cout << "Key: " << pair.first->toString() 
-            << ", Value: " << pair.second->toString() << "\n";
-  }
 
   // ./runtime/src/backends/qsym/qsym/qsym/pintool/solver.cpp
   // https://github.com/eurecom-s3/qsym/blob/ccd2f41f2efb1b0517b83458c181e060497fa589/qsym/pintool/solver.cpp#L160-L188
